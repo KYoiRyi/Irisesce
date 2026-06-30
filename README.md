@@ -8,6 +8,8 @@ AVPlayer -> AVPlayerItemVideoOutput -> Core ML ArtCNN -> FlutterTexture -> Flutt
 
 The first screen is a Flutter `Stack` with a `Texture`, basic controls, an ArtCNN switch, diagnostics, and a test danmaku overlay.
 
+ArtCNN C4F16 in this phase is treated as a one-channel luma model. The iOS bridge scales the source frame, runs ArtCNN on luma, then reconstructs RGB by combining the model luma with the original frame chroma. The control bar shows frame counts, inference time, model output shape/strides, and video diagnostics; native logs are prefixed with `[Irisesce.ArtCNN]`.
+
 On iOS the test player loads the first supported video it finds in the app Documents folder, then starts playback. Supported test extensions are `.mp4`, `.mov`, `.m4v`, and `.hevc`.
 
 MKV is detected but not played in phase 1 because this build intentionally uses AVPlayer only. For quick testing, remux one MKV into MP4 without re-encoding:

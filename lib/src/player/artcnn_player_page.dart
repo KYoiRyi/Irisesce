@@ -212,7 +212,7 @@ class _PlayerControls extends StatelessWidget {
     final aiDetail = !state.artCnnEnabled
         ? null
         : hasAiStats
-            ? 'done ${state.processedFrames} skip ${state.skippedFrames}'
+            ? 'done ${state.processedFrames} skip ${state.skippedFrames}${state.lastInferenceMs == null ? '' : ' ${state.lastInferenceMs!.toStringAsFixed(1)}ms'}'
             : 'waiting frames';
     return Align(
       alignment: Alignment.bottomCenter,
@@ -242,6 +242,19 @@ class _PlayerControls extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(color: Colors.white70),
+                    ),
+                  ),
+                ),
+              if (state.diagnostics != null)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+                    child: Text(
+                      state.diagnostics!,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: Colors.white54, fontSize: 12),
                     ),
                   ),
                 ),

@@ -16,6 +16,7 @@ final class ArtCnnPlayer {
   private let modelInputHeight = 360
   private let modelOutputWidth = 1280
   private let modelOutputHeight = 720
+  private let artCnnLumaBlend: Float = 0.65
   private let pixelBufferAttributes: [String: Any] = [
     kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
     kCVPixelBufferMetalCompatibilityKey as String: true,
@@ -35,6 +36,9 @@ final class ArtCnnPlayer {
   private var frameRate: Double?
   private var lastInferenceMs: Double?
   private var lastError: String?
+  private var sourcePath: String?
+  private var diagnostics = "idle"
+  private var lastLoggedProcessedFrame: Int64 = 0
 
   init(
     textureId: Int64,
@@ -63,6 +67,12 @@ final class ArtCnnPlayer {
     item.add(output)
     videoOutput = output
     player.replaceCurrentItem(with: item)
+    sourcePath = url.path
+    processedFrames = 0
+    skippedFrames = 0
+    lastInferenceMs = nil
+    diagnostics = "loaded \(url.lastPathComponent)"
+    log("load source=\(url.path)")
     collectDiagnostics(from: item.asset)
     lastError = nil
   }
@@ -136,6 +146,8 @@ final class ArtCnnPlayer {
 
   func setArtCNNEnabled(_ enabled: Bool) {
     artCnnEnabled = enabled
+    diagnostics = enabled ? "ArtCNN enabled" : "ArtCNN disabled"
+    log(diagnostics)
     if enabled && artCnnModel == nil {
       processingQueue.async { [weak self] in
         self?.loadArtCnnModelIfNeeded()
@@ -158,6 +170,8 @@ final class ArtCnnPlayer {
       height: height,
       frameRate: frameRate,
       lastInferenceMs: lastInferenceMs,
+      sourcePath: sourcePath,
+      diagnostics: diagnostics,
       error: lastError
     )
   }
@@ -203,6 +217,10 @@ final class ArtCnnPlayer {
       let outputBuffer = self.runArtCnn(input: pixelBuffer) ?? pixelBuffer
       self.lastInferenceMs = (CACurrentMediaTime() - started) * 1000
       self.processedFrames += 1
+      if self.processedFrames - self.lastLoggedProcessedFrame >= 30 {
+        self.lastLoggedProcessedFrame = self.processedFrames
+        self.log("processed=\(self.processedFrames) skipped=\(self.skippedFrames) inferenceMs=\(String(format: "%.2f", self.lastInferenceMs ?? 0)) \(self.diagnostics)")
+      }
       self.publish(outputBuffer)
       self.isInferencing = false
     }
@@ -222,11 +240,15 @@ final class ArtCnnPlayer {
     do {
       guard let url = artCnnModelUrl() else {
         lastError = "ArtCNN_C4F16.mlmodelc was not found in the app bundle"
+        log(lastError ?? "missing ArtCNN model")
         return
       }
       artCnnModel = try MLModel(contentsOf: url)
+      diagnostics = describe(model: artCnnModel)
+      log("model loaded url=\(url.path) \(diagnostics)")
     } catch {
       lastError = "Failed to load ArtCNN model: \(error.localizedDescription)"
+      log(lastError ?? "model load failed")
     }
   }
 
@@ -265,14 +287,16 @@ final class ArtCnnPlayer {
           return outputBuffer
         }
         if let outputArray = outputValue?.multiArrayValue,
-           let outputBuffer = makePixelBuffer(from: outputArray) {
+           let outputBuffer = makePixelBuffer(from: outputArray, source: pixelBuffer) {
           lastError = nil
           return outputBuffer
         }
       }
       lastError = "ArtCNN model did not return a pixel buffer"
+      log(lastError ?? "missing output")
     } catch {
       lastError = "ArtCNN inference failed: \(error.localizedDescription)"
+      log(lastError ?? "inference failed")
     }
     return nil
   }
@@ -305,6 +329,11 @@ final class ArtCnnPlayer {
 
     let bytesPerRow = CVPixelBufferGetBytesPerRow(scaledBuffer)
     let output = array.dataPointer.bindMemory(to: Float32.self, capacity: modelInputWidth * modelInputHeight)
+    let strides = array.strides.map(\.intValue)
+    let nStride = strides.count > 0 ? strides[0] : modelInputWidth * modelInputHeight
+    let cStride = strides.count > 1 ? strides[1] : modelInputWidth * modelInputHeight
+    let yStride = strides.count > 2 ? strides[2] : modelInputWidth
+    let xStride = strides.count > 3 ? strides[3] : 1
     for y in 0..<modelInputHeight {
       let row = baseAddress.advanced(by: y * bytesPerRow).bindMemory(to: UInt8.self, capacity: modelInputWidth * 4)
       for x in 0..<modelInputWidth {
@@ -312,7 +341,7 @@ final class ArtCnnPlayer {
         let blue = Float32(row[offset])
         let green = Float32(row[offset + 1])
         let red = Float32(row[offset + 2])
-        output[y * modelInputWidth + x] = (0.114 * blue + 0.587 * green + 0.299 * red) / 255.0
+        output[nStride * 0 + cStride * 0 + yStride * y + xStride * x] = (0.114 * blue + 0.587 * green + 0.299 * red) / 255.0
       }
     }
     return array
@@ -340,7 +369,12 @@ final class ArtCnnPlayer {
     return output
   }
 
-  private func makePixelBuffer(from array: MLMultiArray) -> CVPixelBuffer? {
+  private func makePixelBuffer(from array: MLMultiArray, source: CVPixelBuffer) -> CVPixelBuffer? {
+    guard let colorBuffer = makeScaledBgraBuffer(from: source, width: modelOutputWidth, height: modelOutputHeight) else {
+      diagnostics = "failed to scale source color for ArtCNN output"
+      return nil
+    }
+
     var output: CVPixelBuffer?
     let status = CVPixelBufferCreate(
       kCFAllocatorDefault,
@@ -355,24 +389,60 @@ final class ArtCnnPlayer {
     }
 
     CVPixelBufferLockBaseAddress(output, [])
-    defer { CVPixelBufferUnlockBaseAddress(output, []) }
-    guard let baseAddress = CVPixelBufferGetBaseAddress(output) else {
+    CVPixelBufferLockBaseAddress(colorBuffer, .readOnly)
+    defer {
+      CVPixelBufferUnlockBaseAddress(colorBuffer, .readOnly)
+      CVPixelBufferUnlockBaseAddress(output, [])
+    }
+    guard let baseAddress = CVPixelBufferGetBaseAddress(output),
+          let colorBaseAddress = CVPixelBufferGetBaseAddress(colorBuffer) else {
       return nil
     }
 
     let bytesPerRow = CVPixelBufferGetBytesPerRow(output)
+    let colorBytesPerRow = CVPixelBufferGetBytesPerRow(colorBuffer)
     let values = array.dataPointer.bindMemory(to: Float32.self, capacity: modelOutputWidth * modelOutputHeight)
+    let shape = array.shape.map(\.intValue)
+    let strides = array.strides.map(\.intValue)
+    let yDimension = max(0, shape.count - 2)
+    let xDimension = max(0, shape.count - 1)
+    let outputHeight = min(modelOutputHeight, shape[safe: yDimension] ?? modelOutputHeight)
+    let outputWidth = min(modelOutputWidth, shape[safe: xDimension] ?? modelOutputWidth)
+    let nStride = strides.count > 0 ? strides[0] : modelOutputWidth * modelOutputHeight
+    let cStride = strides.count > 1 ? strides[1] : modelOutputWidth * modelOutputHeight
+    let yStride = strides.count > yDimension ? strides[yDimension] : modelOutputWidth
+    let xStride = strides.count > xDimension ? strides[xDimension] : 1
+
     for y in 0..<modelOutputHeight {
       let row = baseAddress.advanced(by: y * bytesPerRow).bindMemory(to: UInt8.self, capacity: modelOutputWidth * 4)
+      let colorRow = colorBaseAddress.advanced(by: y * colorBytesPerRow).bindMemory(to: UInt8.self, capacity: modelOutputWidth * 4)
       for x in 0..<modelOutputWidth {
-        let value = UInt8(max(0, min(255, Int((values[y * modelOutputWidth + x] * 255.0).rounded()))))
         let offset = x * 4
-        row[offset] = value
-        row[offset + 1] = value
-        row[offset + 2] = value
+        let blue = Float(colorRow[offset]) / 255.0
+        let green = Float(colorRow[offset + 1]) / 255.0
+        let red = Float(colorRow[offset + 2]) / 255.0
+        let sourceY = max(0.001, 0.114 * blue + 0.587 * green + 0.299 * red)
+        let modelY: Float
+        if y < outputHeight && x < outputWidth {
+          modelY = clamp(values[nStride * 0 + cStride * 0 + yStride * y + xStride * x], min: 0, max: 1)
+        } else {
+          modelY = sourceY
+        }
+
+        let blendedY = clamp(sourceY * (1.0 - artCnnLumaBlend) + modelY * artCnnLumaBlend, min: 0, max: 1)
+        let cb = (blue - sourceY) * 0.565
+        let cr = (red - sourceY) * 0.713
+        let outRed = clamp(blendedY + 1.403 * cr, min: 0, max: 1)
+        let outBlue = clamp(blendedY + 1.773 * cb, min: 0, max: 1)
+        let outGreen = clamp((blendedY - 0.299 * outRed - 0.114 * outBlue) / 0.587, min: 0, max: 1)
+
+        row[offset] = UInt8((outBlue * 255.0).rounded())
+        row[offset + 1] = UInt8((outGreen * 255.0).rounded())
+        row[offset + 2] = UInt8((outRed * 255.0).rounded())
         row[offset + 3] = 255
       }
     }
+    diagnostics = "ArtCNN output shape=\(shape) strides=\(strides) color=preserved-y blend=\(artCnnLumaBlend)"
     return output
   }
 
@@ -389,17 +459,50 @@ final class ArtCnnPlayer {
           width = Int64(abs(size.width))
           height = Int64(abs(size.height))
           frameRate = Double(nominalFrameRate)
+          diagnostics = "video \(Int(abs(size.width)))x\(Int(abs(size.height))) fps=\(String(format: "%.2f", Double(nominalFrameRate)))"
+          log(diagnostics)
         }
       } catch {
         await MainActor.run {
           lastError = "Failed to read video diagnostics: \(error.localizedDescription)"
+          log(lastError ?? "diagnostics failed")
         }
       }
     }
   }
 
+  private func describe(model: MLModel?) -> String {
+    guard let model else {
+      return "model=nil"
+    }
+    let inputs = model.modelDescription.inputDescriptionsByName.map { name, description in
+      "\(name):\(description.type)"
+    }.sorted().joined(separator: ",")
+    let outputs = model.modelDescription.outputDescriptionsByName.map { name, description in
+      "\(name):\(description.type)"
+    }.sorted().joined(separator: ",")
+    return "model input=[\(inputs)] output=[\(outputs)] expected=\(modelInputWidth)x\(modelInputHeight)->\(modelOutputWidth)x\(modelOutputHeight) blend=\(artCnnLumaBlend)"
+  }
+
+  private func log(_ message: String) {
+    print("[Irisesce.ArtCNN] \(message)")
+  }
+
+  private func clamp(_ value: Float, min minValue: Float, max maxValue: Float) -> Float {
+    Swift.max(minValue, Swift.min(maxValue, value))
+  }
+
   private func playerError(_ code: String, _ message: String) -> PigeonError {
     PigeonError(code: code, message: message, details: nil)
+  }
+}
+
+private extension Array {
+  subscript(safe index: Int) -> Element? {
+    guard indices.contains(index) else {
+      return nil
+    }
+    return self[index]
   }
 }
 

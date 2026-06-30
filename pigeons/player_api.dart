@@ -31,6 +31,8 @@ class PlayerState {
     this.height,
     this.frameRate,
     this.lastInferenceMs,
+    this.sourcePath,
+    this.diagnostics,
     this.error,
   });
 
@@ -45,6 +47,8 @@ class PlayerState {
   int? height;
   double? frameRate;
   double? lastInferenceMs;
+  String? sourcePath;
+  String? diagnostics;
   String? error;
 }
 

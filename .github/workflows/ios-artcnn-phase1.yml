@@ -18,11 +18,20 @@ on:
         description: "Enable ArtCNN processing by default in the sample player"
         type: boolean
         default: false
+      build_unsigned_ipa:
+        description: "Upload an unsigned device IPA for inspection only"
+        type: boolean
+        default: true
+      build_signed_ipa:
+        description: "Build an installable signed IPA using repository signing secrets"
+        type: boolean
+        default: false
 
 env:
   INCLUDE_ARTCNN_MODEL: ${{ github.event_name != 'workflow_dispatch' || inputs.include_artcnn_model }}
   REQUIRE_ARTCNN_MODEL: ${{ github.event_name != 'workflow_dispatch' || inputs.require_artcnn_model }}
   ART_CNN_ENABLED_BY_DEFAULT: ${{ github.event_name == 'workflow_dispatch' && inputs.artcnn_enabled_by_default }}
+  BUILD_UNSIGNED_IPA: ${{ github.event_name != 'workflow_dispatch' || inputs.build_unsigned_ipa }}
 
 jobs:
   flutter-and-ios:
@@ -76,3 +85,136 @@ jobs:
 
       - name: Build iOS simulator
         run: flutter build ios --simulator --no-codesign --dart-define=ART_CNN_ENABLED_BY_DEFAULT=$ART_CNN_ENABLED_BY_DEFAULT
+
+      - name: Package simulator app artifact
+        run: |
+          mkdir -p artifacts
+          ditto -c -k --sequesterRsrc --keepParent build/ios/iphonesimulator/Runner.app artifacts/Irisesce-simulator-app.zip
+
+      - name: Upload simulator app
+        uses: actions/upload-artifact@v4
+        with:
+          name: Irisesce-simulator-app
+          path: artifacts/Irisesce-simulator-app.zip
+
+      - name: Build unsigned iOS device app
+        if: env.BUILD_UNSIGNED_IPA == 'true'
+        run: flutter build ios --release --no-codesign --dart-define=ART_CNN_ENABLED_BY_DEFAULT=$ART_CNN_ENABLED_BY_DEFAULT
+
+      - name: Package unsigned IPA
+        if: env.BUILD_UNSIGNED_IPA == 'true'
+        run: |
+          mkdir -p artifacts/Payload
+          cp -R build/ios/iphoneos/Runner.app artifacts/Payload/Runner.app
+          (cd artifacts && zip -qry Irisesce-unsigned.ipa Payload)
+          rm -rf artifacts/Payload
+
+      - name: Upload unsigned IPA
+        if: env.BUILD_UNSIGNED_IPA == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Irisesce-unsigned-ipa
+          path: artifacts/Irisesce-unsigned.ipa
+
+  signed-ipa:
+    if: github.event_name == 'workflow_dispatch' && inputs.build_signed_ipa == true
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Bootstrap Flutter iOS project
+        run: bash scripts/bootstrap_flutter_ios.sh
+
+      - name: Install Dart dependencies
+        run: flutter pub get
+
+      - name: Generate Pigeon bindings
+        run: dart run pigeon --input pigeons/player_api.dart
+
+      - name: Prepare ArtCNN Core ML model
+        if: env.INCLUDE_ARTCNN_MODEL == 'true'
+        run: |
+          python3 -m venv .venv
+          source .venv/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install --index-url https://pypi.org/simple coremltools onnx numpy
+          REQUIRE_FLAG=""
+          if [ "$REQUIRE_ARTCNN_MODEL" = "true" ]; then
+            REQUIRE_FLAG="--require"
+          fi
+          python scripts/prepare_artcnn_model.py $REQUIRE_FLAG
+
+      - name: Import signing certificate
+        env:
+          IOS_DISTRIBUTION_CERTIFICATE_P12_BASE64: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_P12_BASE64 }}
+          IOS_DISTRIBUTION_CERTIFICATE_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_PASSWORD }}
+          IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+          IOS_KEYCHAIN_PASSWORD: ${{ secrets.IOS_KEYCHAIN_PASSWORD }}
+        run: |
+          test -n "$IOS_DISTRIBUTION_CERTIFICATE_P12_BASE64"
+          test -n "$IOS_DISTRIBUTION_CERTIFICATE_PASSWORD"
+          test -n "$IOS_PROVISIONING_PROFILE_BASE64"
+          test -n "$IOS_KEYCHAIN_PASSWORD"
+
+          CERT_PATH="$RUNNER_TEMP/signing_certificate.p12"
+          PROFILE_PATH="$RUNNER_TEMP/profile.mobileprovision"
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+
+          echo "$IOS_DISTRIBUTION_CERTIFICATE_P12_BASE64" | base64 --decode > "$CERT_PATH"
+          echo "$IOS_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$PROFILE_PATH"
+
+          security create-keychain -p "$IOS_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$IOS_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$IOS_DISTRIBUTION_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          UUID=$(/usr/libexec/PlistBuddy -c "Print UUID" /dev/stdin <<< "$(security cms -D -i "$PROFILE_PATH")")
+          cp "$PROFILE_PATH" "$HOME/Library/MobileDevice/Provisioning Profiles/$UUID.mobileprovision"
+
+      - name: Create export options
+        env:
+          IOS_EXPORT_METHOD: ${{ secrets.IOS_EXPORT_METHOD }}
+          IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+          IOS_BUNDLE_IDENTIFIER: ${{ secrets.IOS_BUNDLE_IDENTIFIER }}
+          IOS_PROVISIONING_PROFILE_NAME: ${{ secrets.IOS_PROVISIONING_PROFILE_NAME }}
+        run: |
+          METHOD="${IOS_EXPORT_METHOD:-ad-hoc}"
+          test -n "$IOS_TEAM_ID"
+          test -n "$IOS_BUNDLE_IDENTIFIER"
+          test -n "$IOS_PROVISIONING_PROFILE_NAME"
+          perl -0pi -e "s/PRODUCT_BUNDLE_IDENTIFIER = [^;]+;/PRODUCT_BUNDLE_IDENTIFIER = $IOS_BUNDLE_IDENTIFIER;/g" ios/Runner.xcodeproj/project.pbxproj
+          cat > ios/ExportOptions.plist <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>$METHOD</string>
+            <key>teamID</key>
+            <string>$IOS_TEAM_ID</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>$IOS_BUNDLE_IDENTIFIER</key>
+              <string>$IOS_PROVISIONING_PROFILE_NAME</string>
+            </dict>
+          </dict>
+          </plist>
+          EOF
+
+      - name: Build signed IPA
+        run: flutter build ipa --release --export-options-plist=ios/ExportOptions.plist --dart-define=ART_CNN_ENABLED_BY_DEFAULT=$ART_CNN_ENABLED_BY_DEFAULT
+
+      - name: Upload signed IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Irisesce-signed-ipa
+          path: build/ios/ipa/*.ipa

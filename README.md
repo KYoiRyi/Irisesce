@@ -81,6 +81,24 @@ Manual workflow dispatch exposes switches:
 - `include_artcnn_model`: convert and bundle the ONNX ArtCNN model
 - `require_artcnn_model`: fail when model preparation fails
 - `artcnn_enabled_by_default`: set the app Info.plist default flag for the sample player
+- `build_unsigned_ipa`: upload an unsigned device IPA for inspection
+- `build_signed_ipa`: build and upload an installable signed IPA
+
+Push builds always upload:
+
+- `Irisesce-simulator-app`: installable on an iOS simulator
+- `Irisesce-unsigned-ipa`: unsigned device IPA for inspection only
+
+To produce a real device-installable IPA, add these repository secrets and run the workflow manually with `build_signed_ipa` enabled:
+
+- `IOS_DISTRIBUTION_CERTIFICATE_P12_BASE64`
+- `IOS_DISTRIBUTION_CERTIFICATE_PASSWORD`
+- `IOS_PROVISIONING_PROFILE_BASE64`
+- `IOS_KEYCHAIN_PASSWORD`
+- `IOS_TEAM_ID`
+- `IOS_BUNDLE_IDENTIFIER`
+- `IOS_PROVISIONING_PROFILE_NAME`
+- `IOS_EXPORT_METHOD` optional, defaults to `ad-hoc`
 
 ## Current Limits
 

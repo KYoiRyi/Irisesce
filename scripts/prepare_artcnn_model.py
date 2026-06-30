@@ -88,6 +88,7 @@ def convert_onnx_to_coreml(onnx_path: pathlib.Path, height: int, width: int) -> 
 
     spec = builder.spec
     spec.specificationVersion = 4
+    spec.neuralNetwork.arrayInputShapeMapping = 1
     spec.description.metadata.shortDescription = (
         "ArtCNN C4F16 grayscale 2x model converted from ONNX for phase-1 iOS playback."
     )

@@ -13,6 +13,17 @@ if [ ! -d "$ROOT_DIR/ios/Runner.xcodeproj" ]; then
   flutter create --platforms=ios --project-name irisesce "$ROOT_DIR"
 fi
 
+if [ -f "$ROOT_DIR/ios/Podfile" ]; then
+  if grep -q "^# platform :ios" "$ROOT_DIR/ios/Podfile"; then
+    perl -0pi -e "s/^# platform :ios, '[^']+'/platform :ios, '15.0'/m" "$ROOT_DIR/ios/Podfile"
+  elif grep -q "^platform :ios" "$ROOT_DIR/ios/Podfile"; then
+    perl -0pi -e "s/^platform :ios, '[^']+'/platform :ios, '15.0'/m" "$ROOT_DIR/ios/Podfile"
+  else
+    printf "platform :ios, '15.0'\n" | cat - "$ROOT_DIR/ios/Podfile" > "$ROOT_DIR/ios/Podfile.tmp"
+    mv "$ROOT_DIR/ios/Podfile.tmp" "$ROOT_DIR/ios/Podfile"
+  fi
+fi
+
 if [ -d "$BACKUP_DIR/ios/Runner" ]; then
   cp -R "$BACKUP_DIR/ios/Runner/." "$ROOT_DIR/ios/Runner/"
 fi

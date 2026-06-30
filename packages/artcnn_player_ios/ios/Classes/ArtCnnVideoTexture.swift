@@ -18,7 +18,6 @@ final class ArtCnnVideoTexture: NSObject, FlutterTexture {
       lock.unlock()
       return nil
     }
-    CVPixelBufferRetain(pixelBuffer)
     lock.unlock()
     return Unmanaged.passRetained(pixelBuffer)
   }

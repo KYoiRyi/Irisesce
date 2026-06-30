@@ -8,6 +8,10 @@ AVPlayer -> AVPlayerItemVideoOutput -> Core ML ArtCNN -> FlutterTexture -> Flutt
 
 The first screen is a Flutter `Stack` with a `Texture`, basic controls, an ArtCNN switch, diagnostics, and a test danmaku overlay.
 
+On iOS the test player loads the first supported video it finds in the app Documents folder, then starts playback. Supported test extensions are `.mp4`, `.mov`, `.m4v`, `.hevc`, and `.avi`.
+
+For device testing, copy one video into the app's Documents folder through Finder or the iOS Files app. The CI-generated iOS app enables `UIFileSharingEnabled` and `LSSupportsOpeningDocumentsInPlace` for this.
+
 ## Local Setup
 
 This repository contains the phase-1 source scaffold. If the Flutter iOS project files have not been generated yet, run:

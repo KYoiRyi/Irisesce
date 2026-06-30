@@ -28,4 +28,11 @@ if [ -d "$BACKUP_DIR/ios/Runner" ]; then
   cp -R "$BACKUP_DIR/ios/Runner/." "$ROOT_DIR/ios/Runner/"
 fi
 
+if [ -f "$ROOT_DIR/ios/Runner/Info.plist" ]; then
+  /usr/libexec/PlistBuddy -c "Add :UIFileSharingEnabled bool true" "$ROOT_DIR/ios/Runner/Info.plist" 2>/dev/null || \
+  /usr/libexec/PlistBuddy -c "Set :UIFileSharingEnabled true" "$ROOT_DIR/ios/Runner/Info.plist"
+  /usr/libexec/PlistBuddy -c "Add :LSSupportsOpeningDocumentsInPlace bool true" "$ROOT_DIR/ios/Runner/Info.plist" 2>/dev/null || \
+  /usr/libexec/PlistBuddy -c "Set :LSSupportsOpeningDocumentsInPlace true" "$ROOT_DIR/ios/Runner/Info.plist"
+fi
+
 rm -rf "$BACKUP_DIR"

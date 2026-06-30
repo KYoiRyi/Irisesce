@@ -52,6 +52,7 @@ class PlayerState {
 abstract class PlayerHostApi {
   CreatedPlayer createPlayer();
   void load(int playerId, String uri);
+  String loadFirstDocumentVideo(int playerId);
   void play(int playerId);
   void pause(int playerId);
   void seek(int playerId, int positionMs);

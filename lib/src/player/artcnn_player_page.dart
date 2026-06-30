@@ -28,6 +28,7 @@ class _ArtCnnPlayerPageState extends State<ArtCnnPlayerPage> {
     skippedFrames: 0,
   );
   String? _error;
+  String? _loadedVideoName;
   Timer? _poller;
 
   @override
@@ -56,6 +57,7 @@ class _ArtCnnPlayerPageState extends State<ArtCnnPlayerPage> {
       if (_artCnnEnabledByDefault) {
         await _api.setArtCNNEnabled(created.playerId, true);
       }
+      await _loadDocumentVideo(created.playerId, true);
       _poller = Timer.periodic(const Duration(milliseconds: 500), (_) {
         unawaited(_refreshState());
       });
@@ -64,16 +66,22 @@ class _ArtCnnPlayerPageState extends State<ArtCnnPlayerPage> {
     }
   }
 
-  Future<void> _loadSample() async {
-    final playerId = _playerId;
+  Future<void> _loadDocumentVideo([int? existingPlayerId, bool autoplay = false]) async {
+    final playerId = existingPlayerId ?? _playerId;
     if (playerId == null) {
       return;
     }
     try {
-      await _api.load(
-        playerId,
-        'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
-      );
+      final videoName = await _api.loadFirstDocumentVideo(playerId);
+      if (autoplay) {
+        await _api.play(playerId);
+      }
+      if (mounted) {
+        setState(() {
+          _loadedVideoName = videoName;
+          _error = null;
+        });
+      }
       await _refreshState();
     } catch (error) {
       setState(() => _error = error.toString());
@@ -167,7 +175,8 @@ class _ArtCnnPlayerPageState extends State<ArtCnnPlayerPage> {
             ),
           _PlayerControls(
             state: _state,
-            onLoad: _loadSample,
+            loadedVideoName: _loadedVideoName,
+            onLoad: () => unawaited(_loadDocumentVideo()),
             onPlayPause: _togglePlayback,
             onSeek: _seek,
             onArtCnnChanged: _setArtCnn,
@@ -181,6 +190,7 @@ class _ArtCnnPlayerPageState extends State<ArtCnnPlayerPage> {
 class _PlayerControls extends StatelessWidget {
   const _PlayerControls({
     required this.state,
+    required this.loadedVideoName,
     required this.onLoad,
     required this.onPlayPause,
     required this.onSeek,
@@ -188,6 +198,7 @@ class _PlayerControls extends StatelessWidget {
   });
 
   final PlayerState state;
+  final String? loadedVideoName;
   final VoidCallback onLoad;
   final VoidCallback onPlayPause;
   final ValueChanged<double> onSeek;
@@ -197,6 +208,12 @@ class _PlayerControls extends StatelessWidget {
   Widget build(BuildContext context) {
     final duration = state.durationMs <= 0 ? 1.0 : state.durationMs.toDouble();
     final position = state.positionMs.clamp(0, state.durationMs).toDouble();
+    final hasAiStats = state.processedFrames > 0 || state.skippedFrames > 0;
+    final aiDetail = !state.artCnnEnabled
+        ? null
+        : hasAiStats
+            ? 'done ${state.processedFrames} skip ${state.skippedFrames}'
+            : 'waiting frames';
     return Align(
       alignment: Alignment.bottomCenter,
       child: SafeArea(
@@ -215,6 +232,19 @@ class _PlayerControls extends StatelessWidget {
                 max: duration,
                 onChanged: onSeek,
               ),
+              if (loadedVideoName != null)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Text(
+                      loadedVideoName!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: Colors.white70),
+                    ),
+                  ),
+                ),
               Row(
                 children: [
                   IconButton(
@@ -224,7 +254,7 @@ class _PlayerControls extends StatelessWidget {
                     color: Colors.white,
                   ),
                   IconButton(
-                    tooltip: 'Load sample',
+                    tooltip: 'Load first Documents video',
                     onPressed: onLoad,
                     icon: const Icon(Icons.video_file),
                     color: Colors.white,
@@ -236,9 +266,16 @@ class _PlayerControls extends StatelessWidget {
                   ),
                   const SizedBox(width: 16),
                   Text(
-                    'AI ${state.processedFrames}/${state.skippedFrames}',
-                    style: const TextStyle(color: Colors.white70),
+                    state.artCnnEnabled ? 'ArtCNN on' : 'ArtCNN off',
+                    style: const TextStyle(color: Colors.white),
                   ),
+                  if (aiDetail != null) ...[
+                    const SizedBox(width: 8),
+                    Text(
+                      aiDetail,
+                      style: const TextStyle(color: Colors.white70),
+                    ),
+                  ],
                   const SizedBox(width: 12),
                   Switch(
                     value: state.artCnnEnabled,

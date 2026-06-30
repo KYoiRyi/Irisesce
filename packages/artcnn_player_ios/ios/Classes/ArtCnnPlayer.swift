@@ -67,6 +67,42 @@ final class ArtCnnPlayer {
     lastError = nil
   }
 
+  func loadFirstDocumentVideo() throws -> String {
+    guard let documentsUrl = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
+      throw playerError("documents_unavailable", "Documents directory is unavailable")
+    }
+
+    let supportedExtensions: Set<String> = ["mp4", "mov", "m4v", "hevc", "avi"]
+    let resourceKeys: Set<URLResourceKey> = [.isRegularFileKey, .isHiddenKey]
+    guard let enumerator = FileManager.default.enumerator(
+      at: documentsUrl,
+      includingPropertiesForKeys: Array(resourceKeys),
+      options: [.skipsPackageDescendants]
+    ) else {
+      throw playerError("documents_unavailable", "Cannot read Documents directory at \(documentsUrl.path)")
+    }
+
+    let files = enumerator
+      .compactMap { $0 as? URL }
+      .filter { url in
+        guard supportedExtensions.contains(url.pathExtension.lowercased()) else {
+          return false
+        }
+        let values = try? url.resourceValues(forKeys: resourceKeys)
+        return values?.isRegularFile == true && values?.isHidden != true
+      }
+      .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+
+    guard let videoUrl = files.first else {
+      let message = "No test video found in Documents. Put one .mp4, .mov, .m4v, .hevc, or .avi file in \(documentsUrl.path)"
+      lastError = message
+      throw playerError("document_video_not_found", message)
+    }
+
+    try load(uri: videoUrl.path)
+    return videoUrl.lastPathComponent
+  }
+
   func play() {
     player.play()
   }

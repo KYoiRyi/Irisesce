@@ -35,6 +35,10 @@ public final class ArtCnnPlayerPlugin: NSObject, FlutterPlugin, PlayerHostApi {
     try requirePlayer(playerId).load(uri: uri)
   }
 
+  func loadFirstDocumentVideo(playerId: Int64) throws -> String {
+    try requirePlayer(playerId).loadFirstDocumentVideo()
+  }
+
   func play(playerId: Int64) throws {
     try requirePlayer(playerId).play()
   }

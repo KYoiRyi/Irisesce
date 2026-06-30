@@ -152,7 +152,7 @@ class _ArtCnnPlayerPageState extends State<ArtCnnPlayerPage> {
               child: SafeArea(
                 child: DecoratedBox(
                   decoration: BoxDecoration(
-                    color: Colors.red.withOpacity(0.85),
+                    color: Colors.red.withValues(alpha: 0.85),
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Padding(
@@ -204,7 +204,7 @@ class _PlayerControls extends StatelessWidget {
           margin: const EdgeInsets.all(16),
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           decoration: BoxDecoration(
-            color: Colors.black.withOpacity(0.62),
+            color: Colors.black.withValues(alpha: 0.62),
             borderRadius: BorderRadius.circular(8),
           ),
           child: Column(
@@ -266,10 +266,10 @@ class _TestDanmakuLayer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return IgnorePointer(
+    return const IgnorePointer(
       child: SafeArea(
         child: Stack(
-          children: const [
+          children: [
             Positioned(
               top: 72,
               left: 24,

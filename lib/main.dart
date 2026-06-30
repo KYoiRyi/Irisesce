@@ -6,6 +6,10 @@ void main() {
   runApp(const IrisesceApp());
 }
 
+class MyApp extends IrisesceApp {
+  const MyApp({super.key});
+}
+
 class IrisesceApp extends StatelessWidget {
   const IrisesceApp({super.key});
 

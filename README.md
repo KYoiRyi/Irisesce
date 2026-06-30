@@ -8,7 +8,13 @@ AVPlayer -> AVPlayerItemVideoOutput -> Core ML ArtCNN -> FlutterTexture -> Flutt
 
 The first screen is a Flutter `Stack` with a `Texture`, basic controls, an ArtCNN switch, diagnostics, and a test danmaku overlay.
 
-On iOS the test player loads the first supported video it finds in the app Documents folder, then starts playback. Supported test extensions are `.mp4`, `.mov`, `.m4v`, `.hevc`, and `.avi`.
+On iOS the test player loads the first supported video it finds in the app Documents folder, then starts playback. Supported test extensions are `.mp4`, `.mov`, `.m4v`, and `.hevc`.
+
+MKV is detected but not played in phase 1 because this build intentionally uses AVPlayer only. For quick testing, remux one MKV into MP4 without re-encoding:
+
+```bash
+ffmpeg -i input.mkv -map 0:v:0 -map 0:a? -c copy output.mp4
+```
 
 For device testing, copy one video into the app's Documents folder through Finder or the iOS Files app. The CI-generated iOS app enables `UIFileSharingEnabled` and `LSSupportsOpeningDocumentsInPlace` for this.
 

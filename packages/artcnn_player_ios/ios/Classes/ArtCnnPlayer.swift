@@ -72,7 +72,8 @@ final class ArtCnnPlayer {
       throw playerError("documents_unavailable", "Documents directory is unavailable")
     }
 
-    let supportedExtensions: Set<String> = ["mp4", "mov", "m4v", "hevc", "avi"]
+    let supportedExtensions: Set<String> = ["mp4", "mov", "m4v", "hevc"]
+    let knownUnsupportedExtensions: Set<String> = ["mkv", "avi"]
     let resourceKeys: Set<URLResourceKey> = [.isRegularFileKey, .isHiddenKey]
     guard let enumerator = FileManager.default.enumerator(
       at: documentsUrl,
@@ -82,25 +83,42 @@ final class ArtCnnPlayer {
       throw playerError("documents_unavailable", "Cannot read Documents directory at \(documentsUrl.path)")
     }
 
-    let files = enumerator
+    let videoFiles = enumerator
       .compactMap { $0 as? URL }
       .filter { url in
-        guard supportedExtensions.contains(url.pathExtension.lowercased()) else {
+        let values = try? url.resourceValues(forKeys: resourceKeys)
+        guard values?.isRegularFile == true && values?.isHidden != true else {
           return false
         }
-        let values = try? url.resourceValues(forKeys: resourceKeys)
-        return values?.isRegularFile == true && values?.isHidden != true
+        let fileExtension = url.pathExtension.lowercased()
+        return supportedExtensions.contains(fileExtension) || knownUnsupportedExtensions.contains(fileExtension)
       }
       .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
 
-    guard let videoUrl = files.first else {
-      let message = "No test video found in Documents. Put one .mp4, .mov, .m4v, .hevc, or .avi file in \(documentsUrl.path)"
+    if let playableUrl = videoFiles.first(where: { supportedExtensions.contains($0.pathExtension.lowercased()) }) {
+      try load(uri: playableUrl.path)
+      return playableUrl.lastPathComponent
+    }
+
+    if let unsupportedUrl = videoFiles.first(where: { knownUnsupportedExtensions.contains($0.pathExtension.lowercased()) }) {
+      let message = "Found \(unsupportedUrl.lastPathComponent), but \(unsupportedUrl.pathExtension.uppercased()) is not supported by AVPlayer in phase 1. Remux it to MP4 or MOV without re-encoding for this test build."
+      lastError = message
+      throw playerError("document_video_unsupported", message)
+    }
+
+    do {
+      let allFiles = try FileManager.default.contentsOfDirectory(atPath: documentsUrl.path).joined(separator: ", ")
+      let suffix = allFiles.isEmpty ? "" : " Current files: \(allFiles)"
+      let message = "No test video found in Documents. Put one .mp4, .mov, .m4v, or .hevc file in \(documentsUrl.path).\(suffix)"
+      lastError = message
+      throw playerError("document_video_not_found", message)
+    } catch let error as PigeonError {
+      throw error
+    } catch {
+      let message = "No test video found in Documents. Put one .mp4, .mov, .m4v, or .hevc file in \(documentsUrl.path)."
       lastError = message
       throw playerError("document_video_not_found", message)
     }
-
-    try load(uri: videoUrl.path)
-    return videoUrl.lastPathComponent
   }
 
   func play() {

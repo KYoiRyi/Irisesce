@@ -47,13 +47,15 @@ jobs:
       - name: Prepare ArtCNN Core ML model
         if: env.INCLUDE_ARTCNN_MODEL == 'true'
         run: |
-          python3 -m pip install --upgrade pip
-          python3 -m pip install --index-url https://pypi.org/simple coremltools onnx numpy
+          python3 -m venv .venv
+          source .venv/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install --index-url https://pypi.org/simple coremltools onnx numpy
           REQUIRE_FLAG=""
           if [ "$REQUIRE_ARTCNN_MODEL" = "true" ]; then
             REQUIRE_FLAG="--require"
           fi
-          python3 scripts/prepare_artcnn_model.py $REQUIRE_FLAG
+          python scripts/prepare_artcnn_model.py $REQUIRE_FLAG
 
       - name: Analyze Dart
         run: flutter analyze
@@ -61,10 +63,16 @@ jobs:
       - name: Validate Core ML model
         run: |
           if [ -e packages/artcnn_player_ios/ios/Resources/ArtCNN_C4F16.mlmodel ] || [ -e packages/artcnn_player_ios/ios/Resources/ArtCNN_C4F16.mlmodelc ] || [ -e ArtCNN_C4F16_DN.onnx ]; then
-            python3 -m pip install --upgrade pip
-            python3 -m pip install --index-url https://pypi.org/simple coremltools onnx
+            if [ ! -d .venv ]; then
+              python3 -m venv .venv
+            fi
+            source .venv/bin/activate
+            python -m pip install --upgrade pip
+            python -m pip install --index-url https://pypi.org/simple coremltools onnx
+            python scripts/validate_coreml_model.py
+          else
+            python3 scripts/validate_coreml_model.py
           fi
-          python3 scripts/validate_coreml_model.py
 
       - name: Build iOS simulator
         run: flutter build ios --simulator --no-codesign --dart-define=ART_CNN_ENABLED_BY_DEFAULT=$ART_CNN_ENABLED_BY_DEFAULT

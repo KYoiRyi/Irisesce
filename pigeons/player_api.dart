@@ -33,6 +33,7 @@ class PlayerState {
     this.lastInferenceMs,
     this.sourcePath,
     this.diagnostics,
+    this.debugLog,
     this.error,
   });
 
@@ -49,6 +50,7 @@ class PlayerState {
   double? lastInferenceMs;
   String? sourcePath;
   String? diagnostics;
+  String? debugLog;
   String? error;
 }
 

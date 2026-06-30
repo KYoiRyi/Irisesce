@@ -12,11 +12,7 @@ final class ArtCnnPlayer {
   private let textureRegistry: FlutterTextureRegistry
   private let ciContext = CIContext()
   private let processingQueue = DispatchQueue(label: "irisesce.artcnn.processing", qos: .userInitiated)
-  private let modelInputWidth = 640
-  private let modelInputHeight = 360
-  private let modelOutputWidth = 1280
-  private let modelOutputHeight = 720
-  private let artCnnLumaBlend: Float = 0.65
+  private let maxDebugLogLines = 300
   private let pixelBufferAttributes: [String: Any] = [
     kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
     kCVPixelBufferMetalCompatibilityKey as String: true,
@@ -39,6 +35,7 @@ final class ArtCnnPlayer {
   private var sourcePath: String?
   private var diagnostics = "idle"
   private var lastLoggedProcessedFrame: Int64 = 0
+  private var debugLogLines: [String] = []
 
   init(
     textureId: Int64,
@@ -172,6 +169,7 @@ final class ArtCnnPlayer {
       lastInferenceMs: lastInferenceMs,
       sourcePath: sourcePath,
       diagnostics: diagnostics,
+      debugLog: debugLogLines.joined(separator: "\n"),
       error: lastError
     )
   }
@@ -219,7 +217,7 @@ final class ArtCnnPlayer {
       self.processedFrames += 1
       if self.processedFrames - self.lastLoggedProcessedFrame >= 30 {
         self.lastLoggedProcessedFrame = self.processedFrames
-        self.log("processed=\(self.processedFrames) skipped=\(self.skippedFrames) inferenceMs=\(String(format: "%.2f", self.lastInferenceMs ?? 0)) \(self.diagnostics)")
+      self.log("processed=\(self.processedFrames) skipped=\(self.skippedFrames) inferenceMs=\(String(format: "%.2f", self.lastInferenceMs ?? 0)) \(self.diagnostics)")
       }
       self.publish(outputBuffer)
       self.isInferencing = false
@@ -316,27 +314,26 @@ final class ArtCnnPlayer {
   }
 
   private func makeInputArray(from source: CVPixelBuffer) throws -> MLMultiArray {
-    let array = try MLMultiArray(shape: [1, 1, NSNumber(value: modelInputHeight), NSNumber(value: modelInputWidth)], dataType: .float32)
-    guard let scaledBuffer = makeScaledBgraBuffer(from: source, width: modelInputWidth, height: modelInputHeight) else {
-      throw playerError("preprocess_failed", "Failed to scale video frame for ArtCNN")
+    let inputWidth = CVPixelBufferGetWidth(source)
+    let inputHeight = CVPixelBufferGetHeight(source)
+    let array = try MLMultiArray(shape: [1, 1, NSNumber(value: inputHeight), NSNumber(value: inputWidth)], dataType: .float32)
+
+    CVPixelBufferLockBaseAddress(source, .readOnly)
+    defer { CVPixelBufferUnlockBaseAddress(source, .readOnly) }
+    guard let baseAddress = CVPixelBufferGetBaseAddress(source) else {
+      throw playerError("preprocess_failed", "Video frame has no base address")
     }
 
-    CVPixelBufferLockBaseAddress(scaledBuffer, .readOnly)
-    defer { CVPixelBufferUnlockBaseAddress(scaledBuffer, .readOnly) }
-    guard let baseAddress = CVPixelBufferGetBaseAddress(scaledBuffer) else {
-      throw playerError("preprocess_failed", "Scaled video frame has no base address")
-    }
-
-    let bytesPerRow = CVPixelBufferGetBytesPerRow(scaledBuffer)
-    let output = array.dataPointer.bindMemory(to: Float32.self, capacity: modelInputWidth * modelInputHeight)
+    let bytesPerRow = CVPixelBufferGetBytesPerRow(source)
+    let output = array.dataPointer.bindMemory(to: Float32.self, capacity: array.count)
     let strides = array.strides.map(\.intValue)
-    let nStride = strides.count > 0 ? strides[0] : modelInputWidth * modelInputHeight
-    let cStride = strides.count > 1 ? strides[1] : modelInputWidth * modelInputHeight
-    let yStride = strides.count > 2 ? strides[2] : modelInputWidth
+    let nStride = strides.count > 0 ? strides[0] : inputWidth * inputHeight
+    let cStride = strides.count > 1 ? strides[1] : inputWidth * inputHeight
+    let yStride = strides.count > 2 ? strides[2] : inputWidth
     let xStride = strides.count > 3 ? strides[3] : 1
-    for y in 0..<modelInputHeight {
-      let row = baseAddress.advanced(by: y * bytesPerRow).bindMemory(to: UInt8.self, capacity: modelInputWidth * 4)
-      for x in 0..<modelInputWidth {
+    for y in 0..<inputHeight {
+      let row = baseAddress.advanced(by: y * bytesPerRow).bindMemory(to: UInt8.self, capacity: inputWidth * 4)
+      for x in 0..<inputWidth {
         let offset = x * 4
         let blue = Float32(row[offset])
         let green = Float32(row[offset + 1])
@@ -344,6 +341,7 @@ final class ArtCnnPlayer {
         output[nStride * 0 + cStride * 0 + yStride * y + xStride * x] = (0.114 * blue + 0.587 * green + 0.299 * red) / 255.0
       }
     }
+    diagnostics = "ArtCNN input \(inputWidth)x\(inputHeight) shape=\(array.shape.map(\.intValue)) strides=\(strides)"
     return array
   }
 
@@ -370,7 +368,19 @@ final class ArtCnnPlayer {
   }
 
   private func makePixelBuffer(from array: MLMultiArray, source: CVPixelBuffer) -> CVPixelBuffer? {
-    guard let colorBuffer = makeScaledBgraBuffer(from: source, width: modelOutputWidth, height: modelOutputHeight) else {
+    let shape = array.shape.map(\.intValue)
+    let strides = array.strides.map(\.intValue)
+    let yDimension = max(0, shape.count - 2)
+    let xDimension = max(0, shape.count - 1)
+    let outputHeight = shape[safe: yDimension] ?? (CVPixelBufferGetHeight(source) * 2)
+    let outputWidth = shape[safe: xDimension] ?? (CVPixelBufferGetWidth(source) * 2)
+
+    guard outputWidth > 0, outputHeight > 0 else {
+      diagnostics = "invalid ArtCNN output shape=\(shape)"
+      return nil
+    }
+
+    guard let colorBuffer = makeScaledBgraBuffer(from: source, width: outputWidth, height: outputHeight) else {
       diagnostics = "failed to scale source color for ArtCNN output"
       return nil
     }
@@ -378,8 +388,8 @@ final class ArtCnnPlayer {
     var output: CVPixelBuffer?
     let status = CVPixelBufferCreate(
       kCFAllocatorDefault,
-      modelOutputWidth,
-      modelOutputHeight,
+      outputWidth,
+      outputHeight,
       kCVPixelFormatType_32BGRA,
       pixelBufferAttributes as CFDictionary,
       &output
@@ -401,40 +411,28 @@ final class ArtCnnPlayer {
 
     let bytesPerRow = CVPixelBufferGetBytesPerRow(output)
     let colorBytesPerRow = CVPixelBufferGetBytesPerRow(colorBuffer)
-    let values = array.dataPointer.bindMemory(to: Float32.self, capacity: modelOutputWidth * modelOutputHeight)
-    let shape = array.shape.map(\.intValue)
-    let strides = array.strides.map(\.intValue)
-    let yDimension = max(0, shape.count - 2)
-    let xDimension = max(0, shape.count - 1)
-    let outputHeight = min(modelOutputHeight, shape[safe: yDimension] ?? modelOutputHeight)
-    let outputWidth = min(modelOutputWidth, shape[safe: xDimension] ?? modelOutputWidth)
-    let nStride = strides.count > 0 ? strides[0] : modelOutputWidth * modelOutputHeight
-    let cStride = strides.count > 1 ? strides[1] : modelOutputWidth * modelOutputHeight
-    let yStride = strides.count > yDimension ? strides[yDimension] : modelOutputWidth
+    let values = array.dataPointer.bindMemory(to: Float32.self, capacity: array.count)
+    let nStride = strides.count > 0 ? strides[0] : outputWidth * outputHeight
+    let cStride = strides.count > 1 ? strides[1] : outputWidth * outputHeight
+    let yStride = strides.count > yDimension ? strides[yDimension] : outputWidth
     let xStride = strides.count > xDimension ? strides[xDimension] : 1
 
-    for y in 0..<modelOutputHeight {
-      let row = baseAddress.advanced(by: y * bytesPerRow).bindMemory(to: UInt8.self, capacity: modelOutputWidth * 4)
-      let colorRow = colorBaseAddress.advanced(by: y * colorBytesPerRow).bindMemory(to: UInt8.self, capacity: modelOutputWidth * 4)
-      for x in 0..<modelOutputWidth {
+    for y in 0..<outputHeight {
+      let row = baseAddress.advanced(by: y * bytesPerRow).bindMemory(to: UInt8.self, capacity: outputWidth * 4)
+      let colorRow = colorBaseAddress.advanced(by: y * colorBytesPerRow).bindMemory(to: UInt8.self, capacity: outputWidth * 4)
+      for x in 0..<outputWidth {
         let offset = x * 4
         let blue = Float(colorRow[offset]) / 255.0
         let green = Float(colorRow[offset + 1]) / 255.0
         let red = Float(colorRow[offset + 2]) / 255.0
         let sourceY = max(0.001, 0.114 * blue + 0.587 * green + 0.299 * red)
-        let modelY: Float
-        if y < outputHeight && x < outputWidth {
-          modelY = clamp(values[nStride * 0 + cStride * 0 + yStride * y + xStride * x], min: 0, max: 1)
-        } else {
-          modelY = sourceY
-        }
+        let modelY = clamp(values[nStride * 0 + cStride * 0 + yStride * y + xStride * x], min: 0, max: 1)
 
-        let blendedY = clamp(sourceY * (1.0 - artCnnLumaBlend) + modelY * artCnnLumaBlend, min: 0, max: 1)
         let cb = (blue - sourceY) * 0.565
         let cr = (red - sourceY) * 0.713
-        let outRed = clamp(blendedY + 1.403 * cr, min: 0, max: 1)
-        let outBlue = clamp(blendedY + 1.773 * cb, min: 0, max: 1)
-        let outGreen = clamp((blendedY - 0.299 * outRed - 0.114 * outBlue) / 0.587, min: 0, max: 1)
+        let outRed = clamp(modelY + 1.403 * cr, min: 0, max: 1)
+        let outBlue = clamp(modelY + 1.773 * cb, min: 0, max: 1)
+        let outGreen = clamp((modelY - 0.299 * outRed - 0.114 * outBlue) / 0.587, min: 0, max: 1)
 
         row[offset] = UInt8((outBlue * 255.0).rounded())
         row[offset + 1] = UInt8((outGreen * 255.0).rounded())
@@ -442,7 +440,7 @@ final class ArtCnnPlayer {
         row[offset + 3] = 255
       }
     }
-    diagnostics = "ArtCNN output shape=\(shape) strides=\(strides) color=preserved-y blend=\(artCnnLumaBlend)"
+    diagnostics = "ArtCNN output \(outputWidth)x\(outputHeight) shape=\(shape) strides=\(strides) color=source-chroma"
     return output
   }
 
@@ -481,11 +479,16 @@ final class ArtCnnPlayer {
     let outputs = model.modelDescription.outputDescriptionsByName.map { name, description in
       "\(name):\(description.type)"
     }.sorted().joined(separator: ",")
-    return "model input=[\(inputs)] output=[\(outputs)] expected=\(modelInputWidth)x\(modelInputHeight)->\(modelOutputWidth)x\(modelOutputHeight) blend=\(artCnnLumaBlend)"
+    return "model input=[\(inputs)] output=[\(outputs)] dynamic-size no-blend"
   }
 
   private func log(_ message: String) {
-    print("[Irisesce.ArtCNN] \(message)")
+    let line = "[Irisesce.ArtCNN] \(message)"
+    print(line)
+    debugLogLines.append(line)
+    if debugLogLines.count > maxDebugLogLines {
+      debugLogLines.removeFirst(debugLogLines.count - maxDebugLogLines)
+    }
   }
 
   private func clamp(_ value: Float, min minValue: Float, max maxValue: Float) -> Float {

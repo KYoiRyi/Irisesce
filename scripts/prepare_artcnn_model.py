@@ -16,6 +16,7 @@ def convert_onnx_to_coreml(onnx_path: pathlib.Path, height: int, width: int) -> 
     import onnx
     from coremltools.models import datatypes
     from coremltools.models.neural_network import NeuralNetworkBuilder
+    from coremltools.models.neural_network import flexible_shape_utils
     from coremltools.models.utils import save_spec
     from onnx import numpy_helper
 
@@ -86,6 +87,18 @@ def convert_onnx_to_coreml(onnx_path: pathlib.Path, height: int, width: int) -> 
     spec = builder.spec
     spec.specificationVersion = 4
     spec.neuralNetwork.arrayInputShapeMapping = 1
+    flexible_shape_utils.set_multiarray_ndshape_range(
+        spec,
+        "input",
+        lower_bounds=[1, 1, 16, 16],
+        upper_bounds=[1, 1, 2160, 3840],
+    )
+    flexible_shape_utils.set_multiarray_ndshape_range(
+        spec,
+        "output",
+        lower_bounds=[1, 1, 32, 32],
+        upper_bounds=[1, 1, 4320, 7680],
+    )
     spec.description.metadata.shortDescription = (
         "ArtCNN C4F16 grayscale 2x model converted from ONNX for phase-1 iOS playback."
     )

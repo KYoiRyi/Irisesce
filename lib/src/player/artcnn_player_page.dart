@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:artcnn_player_ios/artcnn_player_ios.dart';
 
 class ArtCnnPlayerPage extends StatefulWidget {
@@ -180,9 +181,52 @@ class _ArtCnnPlayerPageState extends State<ArtCnnPlayerPage> {
             onPlayPause: _togglePlayback,
             onSeek: _seek,
             onArtCnnChanged: _setArtCnn,
+            onShowLog: () => _showDebugLog(context),
           ),
         ],
       ),
+    );
+  }
+
+  void _showDebugLog(BuildContext context) {
+    final logText = _state.debugLog?.isNotEmpty == true
+        ? _state.debugLog!
+        : 'No native ArtCNN logs yet.';
+    showDialog<void>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: const Color(0xff181818),
+          title: const Text('ArtCNN log', style: TextStyle(color: Colors.white)),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: SingleChildScrollView(
+              child: SelectableText(
+                logText,
+                style: const TextStyle(
+                  color: Colors.white70,
+                  fontFamily: 'monospace',
+                  fontSize: 12,
+                ),
+              ),
+            ),
+          ),
+          actions: [
+            TextButton.icon(
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: logText));
+                Navigator.of(context).pop();
+              },
+              icon: const Icon(Icons.copy),
+              label: const Text('Copy'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Close'),
+            ),
+          ],
+        );
+      },
     );
   }
 }
@@ -195,6 +239,7 @@ class _PlayerControls extends StatelessWidget {
     required this.onPlayPause,
     required this.onSeek,
     required this.onArtCnnChanged,
+    required this.onShowLog,
   });
 
   final PlayerState state;
@@ -203,6 +248,7 @@ class _PlayerControls extends StatelessWidget {
   final VoidCallback onPlayPause;
   final ValueChanged<double> onSeek;
   final ValueChanged<bool> onArtCnnChanged;
+  final VoidCallback onShowLog;
 
   @override
   Widget build(BuildContext context) {
@@ -270,6 +316,12 @@ class _PlayerControls extends StatelessWidget {
                     tooltip: 'Load first Documents video',
                     onPressed: onLoad,
                     icon: const Icon(Icons.video_file),
+                    color: Colors.white,
+                  ),
+                  IconButton(
+                    tooltip: 'Show ArtCNN log',
+                    onPressed: onShowLog,
+                    icon: const Icon(Icons.article),
                     color: Colors.white,
                   ),
                   const Spacer(),

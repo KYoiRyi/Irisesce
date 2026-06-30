@@ -27,8 +27,8 @@ def convert_onnx_to_coreml(onnx_path: pathlib.Path, height: int, width: int) -> 
     weights = {item.name: numpy_helper.to_array(item) for item in model.graph.initializer}
 
     builder = NeuralNetworkBuilder(
-        [("input", datatypes.Array(1, height, width))],
-        [("output", datatypes.Array(1, height * 2, width * 2))],
+        [("input", datatypes.Array(1, 1, height, width))],
+        [("output", datatypes.Array(1, 1, height * 2, width * 2))],
     )
 
     for node in model.graph.node:

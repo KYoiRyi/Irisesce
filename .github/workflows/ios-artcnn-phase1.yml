@@ -1,0 +1,70 @@
+name: iOS ArtCNN Phase 1
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      include_artcnn_model:
+        description: "Convert and bundle ArtCNN_C4F16_DN.onnx into the iOS app"
+        type: boolean
+        default: true
+      require_artcnn_model:
+        description: "Fail the workflow when the ArtCNN model cannot be prepared"
+        type: boolean
+        default: true
+      artcnn_enabled_by_default:
+        description: "Enable ArtCNN processing by default in the sample player"
+        type: boolean
+        default: false
+
+env:
+  INCLUDE_ARTCNN_MODEL: ${{ github.event_name != 'workflow_dispatch' || inputs.include_artcnn_model }}
+  REQUIRE_ARTCNN_MODEL: ${{ github.event_name != 'workflow_dispatch' || inputs.require_artcnn_model }}
+  ART_CNN_ENABLED_BY_DEFAULT: ${{ github.event_name == 'workflow_dispatch' && inputs.artcnn_enabled_by_default }}
+
+jobs:
+  flutter-and-ios:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Bootstrap Flutter iOS project
+        run: bash scripts/bootstrap_flutter_ios.sh
+
+      - name: Install Dart dependencies
+        run: flutter pub get
+
+      - name: Generate Pigeon bindings
+        run: dart run pigeon --input pigeons/player_api.dart
+
+      - name: Prepare ArtCNN Core ML model
+        if: env.INCLUDE_ARTCNN_MODEL == 'true'
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install --index-url https://pypi.org/simple coremltools onnx numpy
+          REQUIRE_FLAG=""
+          if [ "$REQUIRE_ARTCNN_MODEL" = "true" ]; then
+            REQUIRE_FLAG="--require"
+          fi
+          python3 scripts/prepare_artcnn_model.py $REQUIRE_FLAG
+
+      - name: Analyze Dart
+        run: flutter analyze
+
+      - name: Validate Core ML model
+        run: |
+          if [ -e packages/artcnn_player_ios/ios/Resources/ArtCNN_C4F16.mlmodel ] || [ -e packages/artcnn_player_ios/ios/Resources/ArtCNN_C4F16.mlmodelc ] || [ -e ArtCNN_C4F16_DN.onnx ]; then
+            python3 -m pip install --upgrade pip
+            python3 -m pip install --index-url https://pypi.org/simple coremltools onnx
+          fi
+          python3 scripts/validate_coreml_model.py
+
+      - name: Build iOS simulator
+        run: flutter build ios --simulator --no-codesign --dart-define=ART_CNN_ENABLED_BY_DEFAULT=$ART_CNN_ENABLED_BY_DEFAULT

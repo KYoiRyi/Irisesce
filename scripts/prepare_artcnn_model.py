@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import argparse
 import pathlib
-import shutil
-import subprocess
 import sys
 
 
@@ -11,7 +9,6 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 DEFAULT_ONNX = ROOT / "ArtCNN_C4F16_DN.onnx"
 RESOURCE_DIR = ROOT / "packages" / "artcnn_player_ios" / "ios" / "Resources"
 MLMODEL_PATH = RESOURCE_DIR / "ArtCNN_C4F16.mlmodel"
-MLMODELC_PATH = RESOURCE_DIR / "ArtCNN_C4F16.mlmodelc"
 
 
 def convert_onnx_to_coreml(onnx_path: pathlib.Path, height: int, width: int) -> None:
@@ -106,25 +103,6 @@ def convert_onnx_to_coreml(onnx_path: pathlib.Path, height: int, width: int) -> 
         print(f"Core ML runtime load check skipped or unavailable: {error}")
 
 
-def compile_model_if_possible() -> None:
-    compiler = shutil.which("xcrun")
-    if not compiler or not MLMODEL_PATH.exists():
-        return
-    if MLMODELC_PATH.exists():
-        shutil.rmtree(MLMODELC_PATH)
-    subprocess.run(
-        [
-            "xcrun",
-            "coremlcompiler",
-            "compile",
-            str(MLMODEL_PATH),
-            str(RESOURCE_DIR),
-        ],
-        check=True,
-    )
-    print(f"Compiled {MLMODELC_PATH}")
-
-
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--onnx", type=pathlib.Path, default=DEFAULT_ONNX)
@@ -142,7 +120,6 @@ def main() -> int:
         return 0
 
     convert_onnx_to_coreml(args.onnx, args.height, args.width)
-    compile_model_if_possible()
     return 0
 
 
